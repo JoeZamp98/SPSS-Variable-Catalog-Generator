@@ -238,7 +238,6 @@ def organize_metadata_by_var(extracted_metadata, variable_inclusion):
 
     return key_metadata_types
 
-
 ## -- CONSTRUCT CSV FOR ACTIVE, CONSISTENT VARIABLES -- ##
 
 def construct_csv(extracted_metadata, inconsistencies, variable_inclusion):
@@ -279,8 +278,168 @@ def generate_variable_catalog(variable_inclusion):
 
     all_unique_variables = variable_inclusion[0]
     
-    data_dictionary = pd.DataFrame() #Initializes as a blank DataFrame, which we will gradually build out below
+    variable_catalog = pd.DataFrame() #Initializes as a blank DataFrame, which we will gradually build out below
 
     #Append list of all unique variables as keys
 
-    data_dictionary['variable_name'] = all_unique_variables
+    variable_catalog['variable_name'] = all_unique_variables
+
+    return variable_catalog
+
+## -- GENERATE FLAGS FOR INCONSISTENT VARIABLES -- ##    
+
+def generate_inconsistency_flags(key_metadata_types):
+
+    #Column labels 
+    def detect_col_label_inconsistenceis(key_metadata_types):
+
+        inconsistent_col_labels = {}
+
+        var_val_dict = key_metadata_types['column_names_to_labels'][0]
+
+        for variable in var_val_dict:
+
+            val_instances = var_val_dict[variable]
+
+            if len(val_instances) > 0:
+
+                comparison_result = all(ele == val_instances[0] for ele in val_instances)
+
+                if comparison_result == False:
+
+                    inconsistent_col_labels[variable] = "Inconsistent column labels"
+                
+                else:
+
+                    inconsistent_col_labels[variable] = ""
+
+        return inconsistent_col_labels
+
+    inconsistent_col_labels = detect_col_label_inconsistenceis(key_metadata_types)
+
+    #Variable value labels
+    def detect_var_val_inconsistencies(key_metadata_types):
+
+        inconsistent_var_vals = {}
+
+        var_val_dict = key_metadata_types['variable_value_labels'][0]
+
+        for variable in var_val_dict:
+
+            val_instances = var_val_dict[variable]
+
+            if len(val_instances) > 0:
+
+                comparison_result = all(ele == val_instances[0] for ele in val_instances)
+
+                if comparison_result == False:
+
+                    inconsistent_var_vals[variable] = "inconsistent variable value labels"
+
+        return inconsistent_var_vals
+
+    inconsistent_var_vals = detect_var_val_inconsistencies(key_metadata_types)
+
+    return inconsistent_col_labels, inconsistent_var_vals
+
+## -- IMPORT TEAM COMMENTS FROM GOOGLE SHEET -- ##
+
+def import_comments():
+    
+    file_id = 'FILE_ID' #This is the team comments Google Sheet
+    file_content = client.file(file_id).content()
+
+    file = client.file(file_id)
+
+    with open('team_comments.xlsx', 'wb') as open_file:
+
+        client.file(file_id).download_to(open_file)
+        open_file.close()
+    
+    team_comments = pd.read_excel('team_comments.xlsx')
+
+    os.remove('team_comments.xlsx')
+
+    #Convert team comments to a dictionary
+
+    team_comments_dict = {}
+
+    team_comments.set_index("Variable", inplace=True)
+
+    for var in team_comments.index:
+
+        team_comments_dict[var] = team_comments.loc[var, "Team Comments"]
+
+    return team_comments_dict
+
+## -- POPULATE THE DESCRIPTIVE COLUMNS OF THE VARIABLE CATALOG -- ##
+
+def populate_columns(variable_catalog, variable_inclusion, inconsistencies, team_comments_dict):
+
+    all_unique_variables = variable_inclusion[0]
+    all_variable_instances = variable_inclusion[1]
+    list_of_variable_appearances = variable_inclusion[2]
+    inconsistent_col_labels = inconsistencies[0]
+    inconsistent_var_vals = inconsistencies[1]
+
+    for var in all_unique_variables:
+
+        #Column labels
+        variable_catalog['variable_labels'] = variable_catalog['variable_name'].apply(lambda var: get_labels(var))
+        
+        #Variable value labels
+        variable_catalog['variable_value_labels'] = variable_catalog['variable_name'].apply(lambda var: get_var_val_labels(var))
+
+        #Variable measures
+        variable_catalog['variable_measures'] = variable_catalog['variable_name'].apply(lambda var: get_variable_measures(var))
+
+        #Variable display widths
+        variable_catalog['variable_widths'] = variable_catalog['variable_name'].apply(lambda var: get_variable_width(var))
+
+        #Inconsistent column label flag
+        variable_catalog['inconsistent_column_labels'] = variable_catalog['variable_name'].apply(lambda var: inconsistent_col_labels.get(var))
+
+        #Inconsistent variable value label flag
+        variable_catalog['inconsistent_variable_value_labels'] = variable_catalog['variable_name'].apply(lambda var: inconsistent_var_vals.get(var))
+
+        #URC team comments
+        variable_catalog['URC_team_comments'] = variable_catalog['variable_name'].apply(lambda var: team_comments_dict.get(var))
+
+        #Number of appearances
+        variable_catalog['number_of_appearances'] = variable_catalog['variable_name'].apply(lambda var: all_variable_instances.get(var))
+
+        #List of all appearances
+        variable_catalog['list_of_appearances'] = variable_catalog['variable_name'].apply(lambda var: list_of_variable_appearances.get(var))
+
+    if os.path.isdir('generated-csv-files') == False:
+
+        os.mkdir('generated-csv-files')
+
+    variable_catalog.to_csv('generated-csv-files/variable_catalog.csv')
+
+## -- POST FILE TO RELEVANT LOCATION IN BOX -- ##
+
+def post_to_box(box_client):
+
+    folder_id = 'FOLDER_ID'
+    file_id = 'FILE_ID'
+
+    existing_files = box_client.folder(folder_id = folder_id).get_items()
+
+    file_names = []
+
+    for file in existing_files:
+
+        file_names.append(file.name)
+
+    if 'data_dictionary.csv' in file_names:
+
+        updated_file = box_client.file(file_id).update_contents('generated-csv-files/variable_catalog.csv')
+        print(f'{updated_file.name} has been updated with a new version.')
+
+    else:
+
+        new_file = box_client.folder(folder_id).upload('generated-csv-files/variable_catalog.csv')
+        print(f'An initial version of {new_file.name} has been uploaded successfully.')
+
+    shutil.rmtree('temp')
