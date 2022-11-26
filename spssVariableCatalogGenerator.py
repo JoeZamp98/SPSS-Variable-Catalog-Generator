@@ -140,7 +140,7 @@ def extract_metadata(all_original_spss_files):
 
 ## -- CREATE A DIRECTORY OF ALL UNIQUE VARIABLES AND HOW FREQUENTLY THEY APPEAR ACROSS RELEVANT FILES -- ##
 
-def determine_variable_inclusion(extracted_metadata, explicit_overrides):
+def determine_variable_inclusion(extracted_metadata):
 
     all_unique_variables = []
     all_column_names_dict = extracted_metadata[0]
@@ -344,16 +344,16 @@ def generate_inconsistency_flags(key_metadata_types):
 
 ## -- IMPORT TEAM COMMENTS FROM GOOGLE SHEET -- ##
 
-def import_comments():
+def import_comments(box_client):
     
     file_id = 'FILE_ID' #This is the team comments Google Sheet
-    file_content = client.file(file_id).content()
+    file_content = box_client.file(file_id).content()
 
-    file = client.file(file_id)
+    file = box_client.file(file_id)
 
     with open('team_comments.xlsx', 'wb') as open_file:
 
-        client.file(file_id).download_to(open_file)
+        box_client.file(file_id).download_to(open_file)
         open_file.close()
     
     team_comments = pd.read_excel('team_comments.xlsx')
@@ -374,27 +374,31 @@ def import_comments():
 
 ## -- POPULATE THE DESCRIPTIVE COLUMNS OF THE VARIABLE CATALOG -- ##
 
-def populate_columns(variable_catalog, variable_inclusion, inconsistencies, team_comments_dict):
+def populate_columns(variable_catalog, variable_inclusion, inconsistencies, team_comments_dict, key_metadata_types):
 
     all_unique_variables = variable_inclusion[0]
     all_variable_instances = variable_inclusion[1]
     list_of_variable_appearances = variable_inclusion[2]
     inconsistent_col_labels = inconsistencies[0]
     inconsistent_var_vals = inconsistencies[1]
+    column_names_to_labels_cleaned = key_metadata_types[0][0]
+    variable_value_labels_cleaned = key_metadata_types[1][0]
+    variable_display_width_cleaned = key_metadata_types[2][0]
+    variable_measure_cleaned = key_metadata_types[3][0]
 
     for var in all_unique_variables:
 
         #Column labels
-        variable_catalog['variable_labels'] = variable_catalog['variable_name'].apply(lambda var: get_labels(var))
+        variable_catalog['variable_labels'] = variable_catalog['variable_name'].apply(lambda var: get_labels(var, column_names_to_labels_cleaned))
         
         #Variable value labels
-        variable_catalog['variable_value_labels'] = variable_catalog['variable_name'].apply(lambda var: get_var_val_labels(var))
+        variable_catalog['variable_value_labels'] = variable_catalog['variable_name'].apply(lambda var: get_var_val_labels(var, variable_value_labels_cleaned))
 
         #Variable measures
-        variable_catalog['variable_measures'] = variable_catalog['variable_name'].apply(lambda var: get_variable_measures(var))
+        variable_catalog['variable_measures'] = variable_catalog['variable_name'].apply(lambda var: get_variable_measures(var, variable_measure_cleaned))
 
         #Variable display widths
-        variable_catalog['variable_widths'] = variable_catalog['variable_name'].apply(lambda var: get_variable_width(var))
+        variable_catalog['variable_widths'] = variable_catalog['variable_name'].apply(lambda var: get_variable_width(var, variable_display_width_cleaned))
 
         #Inconsistent column label flag
         variable_catalog['inconsistent_column_labels'] = variable_catalog['variable_name'].apply(lambda var: inconsistent_col_labels.get(var))
@@ -416,6 +420,8 @@ def populate_columns(variable_catalog, variable_inclusion, inconsistencies, team
         os.mkdir('generated-csv-files')
 
     variable_catalog.to_csv('generated-csv-files/variable_catalog.csv')
+
+    return variable_catalog
 
 ## -- POST FILE TO RELEVANT LOCATION IN BOX -- ##
 
@@ -443,3 +449,19 @@ def post_to_box(box_client):
         print(f'An initial version of {new_file.name} has been uploaded successfully.')
 
     shutil.rmtree('temp')
+
+## -- FUNCTION CALLS -- ##
+
+box_client = establish_box_connection()
+download_spss_files(box_client)
+all_original_spss_files = determine_import_list()
+
+extracted_metadata = extract_metadata(all_original_spss_files)
+variable_inclusion = determine_variable_inclusion(extracted_metadata)
+key_metadata_types = organize_metadata_by_var(extracted_metadata, variable_inclusion)
+inconsistencies = generate_inconsistency_flags(key_metadata_types)
+blank_catalog = generate_variable_catalog(variable_inclusion)
+team_comments = import_comments(box_client)
+
+variable_catalog = populate_columns(blank_catalog, variable_inclusion, inconsistencies, team_comments, key_metadata_types)
+post_to_box(box_client)
